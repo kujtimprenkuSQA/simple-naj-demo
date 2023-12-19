@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <ul id="messages"></ul>
+    <textarea id="text" placeholder="Add Message"></textarea>
+    <button id="add-text">Add Text</button>
+    <button id="send-money">Send Money</button>
+    <button id="send-multiple-transactions">Send Multiple Transactions</button>
+    <script src="https://cdn.jsdelivr.net/npm/near-api-js@3.0.0/dist/near-api-js.min.js"></script>
+    <script>
+      // connect to NEAR
+      const near = new nearApi.Near({
+        keyStore: new nearApi.keyStores.BrowserLocalStorageKeyStore(),
+        networkId: "testnet",
+        nodeUrl: "https://rpc.testnet.near.org",
+        walletUrl: "https://wallet.testnet.near.org",
+      });
+
+      // connect to the NEAR Wallet
+      const wallet = new nearApi.WalletConnection(near, "my-app");
+
+      // connect to a NEAR smart contract
+      const contract = new nearApi.Contract(
+        wallet.account(),
+        "guest-book.testnet",
+        {
+          viewMethods: ["getMessages"],
+          changeMethods: ["addMessage"],
+        }
+      );
+
+      const button = document.getElementById("add-text");
+      if (!wallet.isSignedIn()) {
+        button.textContent = "SignIn with NEAR";
+      }
+
+      // call the getMessages view method
+      contract.getMessages().then((messages) => {
+        const ul = document.getElementById("messages");
+        messages.forEach((message) => {
+          const li = document.createElement("li");
+          li.textContent = `${message.sender} - ${message.text}`;
+          ul.appendChild(li);
+        });
+      });
+
+      // Either sign in or call the addMessage change method on button click
+      document.getElementById("add-text").addEventListener("click", () => {
+        if (wallet.isSignedIn()) {
+          contract.addMessage({
+            args: { text: document.getElementById("text").value },
+            amount: nearApi.utils.format.parseNearAmount("0.01"),
+          });
+        } else {
+          wallet.requestSignIn({
+            contractId: "guest-book.testnet",
+            methodNames: ["getMessages", "addMessage"],
+          });
+        }
+      });
+
+      // Send Money
+      document
+        .getElementById("send-money")
+        .addEventListener("click", async () => {
+          if (wallet.isSignedIn()) {
+            const account = await wallet.account();
+
+            const receiverId = "test.testnet"; // Replace this with any account you want to send money to.
+            await account.sendMoney(
+              receiverId,
+              nearApi.utils.format.parseNearAmount("0.01")
+            );
+          } else {
+            wallet.requestSignIn({
+              contractId: "guest-book.testnet",
+              methodNames: ["getMessages", "addMessage"],
+            });
+          }
+        });
+
+      // Send Multiple Transactions
+      document
+        .getElementById("send-multiple-transactions")
+        .addEventListener("click", async () => {
+          // Build the transactions you want to send.
+          const amount = nearApi.utils.format.parseNearAmount("0.01");
+          const transactions = [
+            {
+              receiverId: "kujtim.testnet",
+              actions: [nearApi.transactions.transfer(amount)],
+            },
+            {
+              receiverId: "prenku.testnet",
+              actions: [nearApi.transactions.transfer(amount)],
+            },
+          ];
+
+          if (wallet.isSignedIn()) {
+            // The signed in account via NEAR Wallet
+            const account = await wallet.account();
+            const { networkId, signer, provider } = account.connection;
+
+            // Public Key of the signed-in account.
+            const localKey = await signer.getPublicKey(
+              account.accountId,
+              networkId
+            );
+
+            // Create transactions with "nearApi.transactions.createTransaction()";
+            const txs = await Promise.all(
+              transactions.map(async (transaction, index) => {
+                const accessKey = await account.accessKeyForTransaction(
+                  transaction.receiverId,
+                  transaction.actions,
+                  localKey
+                );
+
+                if (!accessKey) {
+                  throw new Error(
+                    `Failed to find matching key for transaction sent to ${transaction.receiverId}`
+                  );
+                }
+
+                const block = await provider.block({ finality: "final" });
+
+                return nearApi.transactions.createTransaction(
+                  account.accountId,
+                  nearApi.utils.PublicKey.from(accessKey.public_key),
+                  transaction.receiverId,
+                  accessKey.access_key.nonce + 1,
+                  transaction.actions,
+                  nearApi.utils.serialize.base_decode(block.header.hash)
+                );
+              })
+            );
+
+            await wallet.requestSignTransactions({
+              transactions: txs,
+            });
+          } else {
+            wallet.requestSignIn({
+              contractId: "guest-book.testnet",
+              methodNames: ["getMessages", "addMessage"],
+            });
+          }
+        });
+    </script>
+  </body>
+</html>
